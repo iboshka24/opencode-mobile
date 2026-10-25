@@ -44,9 +44,9 @@ export default function ChatScreen() {
       <ScrollView contentContainerStyle={{ padding: 14, gap: 12, flexGrow: 1 }}>
         {app.active.messages.length === 0 && !app.draft ? (
           <View style={{ gap: 10, paddingTop: 24 }}>
-            <Text style={{ color: theme.fg, fontFamily: mono, fontSize: 16 }}>On-device coding agent</Text>
+            <Text style={{ color: theme.fg, fontFamily: mono, fontSize: 16 }}>On this phone</Text>
             <Text style={{ color: theme.muted, fontFamily: mono, fontSize: 13, lineHeight: 20 }}>
-              Calls the model provider directly from this phone. No companion PC and no server. Workspace: {app.workspaceLabel}.
+              The agent runs inside this install. There is no Metro server and no backend. Choose OpenCode Zen or another models.dev provider, save its API key in Settings, and the phone calls that API itself. Workspace: {app.workspaceLabel}.
             </Text>
             {SUGGESTIONS.map((item) => (
               <Pressable key={item} onPress={() => void app.send(item)} style={pill(theme.bgElev, theme.border)}>
