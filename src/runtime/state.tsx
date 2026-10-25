@@ -1,10 +1,12 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Platform } from "react-native";
 import { runAgent } from "../core/agent";
+import { CODEX_BASE_URL } from "../core/auth";
 import { findModel, isFree, MODELS_DEV_URL, parseCatalog, snapshotCatalog, type CatalogModel, type Protocol } from "../core/catalog";
 import { helpText, parseSlash } from "../core/commands";
 import { addUsage, emptyUsage, usageCost, type TokenUsage } from "../core/cost";
 import { unifiedDiff } from "../core/difftext";
+import { chatAuth, copilotModels, isZenProvider, missingKeyMessage, modelVisible, newSessionId, resolveApiKey, zenHeaders } from "../core/identity";
 import { scriptedModel, type ModelMessage } from "../core/llm";
 import { buildSystemPrompt, initPrompt, reviewPrompt } from "../core/prompt";
 import { workspaceIsGit } from "../core/git";
@@ -123,14 +125,10 @@ interface AppValue {
 
 const AppContext = createContext<AppValue | null>(null);
 
-function uid(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
 function blankSession(model: { providerID: string; id: string }): Session {
   const now = Date.now();
   return {
-    id: uid(),
+    id: newSessionId(),
     title: "New session",
     mode: "build",
     providerID: model.providerID,
@@ -188,17 +186,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }),
       ),
     );
-    return [...custom, ...baseModels];
-  }, [baseModels, customProviders]);
+    const copilot = secrets["github-copilot"] ? copilotModels(secrets["github-copilot.api"]) : [];
+    return [...custom, ...copilot, ...baseModels];
+  }, [baseModels, customProviders, secrets]);
 
   const active = sessions.find((session) => session.id === activeId) ?? sessions[0]!;
-  const model = findModel(models, active.providerID, active.modelID) ?? findModel(models, "opencode", "big-pickle") ?? models[0] ?? null;
+  const picked = findModel(models, active.providerID, active.modelID);
+  const freeZen = findModel(models, "opencode", "big-pickle") ?? models.find((item) => item.providerID === "opencode" && isFree(item));
+  const model = picked && modelVisible(picked, secrets) ? picked : freeZen && modelVisible(freeZen, secrets) ? freeZen : picked ?? freeZen ?? models[0] ?? null;
   const theme = themeById(themeId);
 
   const patchSession = (id: string, recipe: (session: Session) => Session) => {
     setSessions((current) => current.map((session) => (session.id === id ? recipe(session) : session)));
   };
   const patchActive = (recipe: (session: Session) => Session) => patchSession(activeId, recipe);
+
+  useEffect(() => {
+    if (!ready || !model) return;
+    if (active.providerID === model.providerID && active.modelID === model.id) return;
+    patchActive((session) => ({ ...session, providerID: model.providerID, modelID: model.id }));
+  }, [ready, model, active.providerID, active.modelID, activeId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -402,8 +409,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         system,
         messages: history,
         model,
-        apiKey: secrets[model.providerID] ?? "",
-        baseUrl: model.api,
+        apiKey: resolveApiKey(model, secrets[model.providerID]),
+        baseUrl: secrets["openai.mode"] === "codex" && model.providerID === "openai" ? CODEX_BASE_URL : model.api,
+        sessionId: session.id,
+        headers: isZenProvider(model.providerID) ? zenHeaders(session.id) : undefined,
+        auth: chatAuth(model.providerID, secrets, resolveApiKey(model, secrets[model.providerID])),
+        accountId: secrets["openai.account"],
         tools: toolDefinitions(session.mode),
         signal: controller.signal,
         chat,
@@ -540,7 +551,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     if (!model) return;
     if (slash.type === "compact") {
-      if (!secrets[model.providerID]) {
+      if (!resolveApiKey(model, secrets[model.providerID])) {
         patchActive((session) => ({
           ...session,
           messages: session.messages.filter((message) => !message.local).slice(-6),
@@ -563,9 +574,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const diffs = active.changes.map((change) => unifiedDiff(change.path, change.before ?? "", change.after ?? "")).join("\n\n");
       prompt = `${reviewPrompt(slash.args)}\n\n${diffs || "No file edits have been recorded in this session."}`;
     }
-    if ((slash.type === "prompt" || slash.type === "init" || slash.type === "review") && !secrets[model.providerID]) {
+    if ((slash.type === "prompt" || slash.type === "init" || slash.type === "review") && !resolveApiKey(model, secrets[model.providerID])) {
       pushLocal(trimmed, "user");
-      pushLocal(`Add an API key for ${model.providerName} in Settings. The key stays on this device. OpenCode Zen free models use OPENCODE_API_KEY.`);
+      pushLocal(missingKeyMessage(model));
       return;
     }
     await runTurn({ ...active, messages: active.messages }, prompt);

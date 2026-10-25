@@ -4,6 +4,7 @@ import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { isFree } from "../core/catalog";
 import { formatCost } from "../core/cost";
+import { isZenProvider, modelVisible, PUBLIC_ZEN_KEY, resolveApiKey } from "../core/identity";
 import { useApp } from "../runtime/state";
 import { mono } from "../ui/theme";
 
@@ -18,12 +19,13 @@ export default function ModelsScreen() {
     const needle = query.trim().toLowerCase();
     const rank = (model: (typeof app.models)[number]) => (model.providerID === "opencode" || model.providerID === "opencode-go" ? 0 : isFree(model) ? 1 : 2);
     return app.models
+      .filter((model) => modelVisible(model, app.secrets))
       .filter((model) => (freeOnly ? isFree(model) : true))
       .filter((model) => (toolsOnly ? model.toolCall : true))
       .filter((model) => !needle || `${model.providerID} ${model.providerName} ${model.id} ${model.name}`.toLowerCase().includes(needle))
       .sort((a, b) => rank(a) - rank(b) || a.providerID.localeCompare(b.providerID) || a.name.localeCompare(b.name))
       .slice(0, 120);
-  }, [app.models, query, freeOnly, toolsOnly]);
+  }, [app.models, app.secrets, query, freeOnly, toolsOnly]);
 
   return (
     <View style={{ flex: 1, backgroundColor: app.theme.bg, paddingTop: insets.top + 8 }}>
@@ -72,6 +74,7 @@ export default function ModelsScreen() {
               <Text style={{ color: app.theme.muted, fontFamily: mono, fontSize: 11 }}>
                 {model.providerID}/{model.id}
                 {isFree(model) ? " · free" : ""}
+                {isZenProvider(model.providerID) && resolveApiKey(model, app.secrets[model.providerID]) === PUBLIC_ZEN_KEY ? " · no key" : ""}
                 {model.reasoning ? " · reasoning" : ""}
                 {model.toolCall ? " · tools" : ""}
               </Text>

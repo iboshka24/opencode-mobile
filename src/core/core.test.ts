@@ -1,7 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { runAgent } from "./agent";
 import { loadAgentsMd } from "./agents-md";
+import {
+  accountIdFromIdToken,
+  anthropicLogin,
+  anthropicTokenBody,
+  formatHttpError,
+  openAIExchangeForm,
+  parseAnthropicCode,
+  parseConsoleDevice,
+  parseCopilotDevice,
+  parseDeviceToken,
+  parseOpenAIDevice,
+  parseOpenAIDeviceToken,
+} from "./auth";
 import { findModel, isFree, parseCatalog, protocolFor, snapshotCatalog } from "./catalog";
+import { modelVisible, PUBLIC_ZEN_KEY, resolveApiKey, sessionAffinity, sha256Hex, zenHeaders } from "./identity";
+import { streamChat } from "./llm";
 import { parseSlash } from "./commands";
 import { formatCost, usageCost } from "./cost";
 import { unifiedDiff } from "./difftext";
@@ -249,6 +264,99 @@ describe("providers and instructions", () => {
     const diff = unifiedDiff("a.txt", "one\ntwo\n", "one\nthree\n");
     expect(diff).toContain("-two");
     expect(diff).toContain("+three");
+  });
+});
+
+describe("zen auth", () => {
+  it("hashes the empty string", () => {
+    expect(sha256Hex("")).toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    expect(sha256Hex("abc")).toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  });
+
+  it("uses the public credential for free Zen models and hides paid ones", () => {
+    const models = snapshotCatalog();
+    const free = findModel(models, "opencode", "big-pickle");
+    const paid = models.find((model) => model.providerID === "opencode" && !isFree(model));
+    expect(free && isFree(free)).toBe(true);
+    expect(resolveApiKey(free!, "")).toBe(PUBLIC_ZEN_KEY);
+    expect(resolveApiKey(free!, "sk-real")).toBe("sk-real");
+    expect(resolveApiKey(paid!, "")).toBe("");
+    expect(resolveApiKey(paid!, "public")).toBe("");
+    expect(modelVisible(paid!, {})).toBe(false);
+    expect(modelVisible(free!, {})).toBe(true);
+    expect(modelVisible(paid!, { opencode: "sk-real" })).toBe(true);
+  });
+
+  it("builds the OpenCode client headers", () => {
+    const headers = zenHeaders("ses_" + "ab".repeat(32));
+    expect(headers["User-Agent"]).toBe("opencode/latest/1.19.4/opencode");
+    expect(headers["x-opencode-client"]).toBe("opencode");
+    expect(headers["x-opencode-session"]).toBe("ses_" + "ab".repeat(32));
+    expect(sessionAffinity("legacy")).toMatch(/^ses_[0-9a-f]{64}$/);
+  });
+
+  it("parses Console, Copilot, and ChatGPT device responses", () => {
+    expect(parseConsoleDevice({ device_code: "d", user_code: "ABCD-1234", verification_uri_complete: "https://console.opencode.ai/auth", interval: 5, expires_in: 600 }).userCode).toBe("ABCD-1234");
+    expect(parseCopilotDevice({ device_code: "d", user_code: "GH-1", verification_uri: "https://github.com/login/device", interval: 5 }).verificationUrl).toContain("github.com");
+    expect(parseDeviceToken({ error: "authorization_pending" })).toEqual({ status: "pending" });
+    expect(parseDeviceToken({ access_token: "tok", refresh_token: "ref", expires_in: 3600, org_id: "org" })).toMatchObject({ status: "ok", access: "tok", orgId: "org" });
+    expect(parseDeviceToken({ error: "slow_down", interval: 10 })).toEqual({ status: "slow_down", intervalSec: 10 });
+    expect(parseOpenAIDevice({ device_auth_id: "dev", user_code: "CODE", interval: "5" }).verificationUrl).toBe("https://auth.openai.com/codex/device");
+    expect(parseOpenAIDeviceToken(404, {})).toEqual({ status: "pending" });
+    expect(parseOpenAIDeviceToken(200, { authorization_code: "c", code_verifier: "v" })).toEqual({ status: "exchange", code: "c", verifier: "v" });
+    expect(openAIExchangeForm("c", "v")).toContain("grant_type=authorization_code");
+    expect(formatHttpError(429, JSON.stringify({ error: { message: "Free usage limit reached" } }))).toBe("HTTP 429: Free usage limit reached");
+  });
+
+  it("keeps Claude PKCE state independent of the verifier", () => {
+    const login = anthropicLogin();
+    expect(login.state).not.toBe(login.verifier);
+    expect(login.url).toContain("code_challenge_method=S256");
+    expect(login.url).not.toContain(`state=${encodeURIComponent(login.verifier)}`);
+    expect(parseAnthropicCode(`abc#${login.state}`, login.state)).toEqual({ code: "abc", state: login.state });
+    expect(() => parseAnthropicCode("abc#other", login.state)).toThrow(/different sign-in/);
+    expect(anthropicTokenBody({ code: "abc", verifier: login.verifier, state: login.state }).state).toBe(login.state);
+  });
+
+  it("reads a ChatGPT account id from the id token", () => {
+    const payload = btoa(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct_1" } })).replaceAll("=", "");
+    expect(accountIdFromIdToken(`aaa.${payload}.bbb`)).toBe("acct_1");
+  });
+
+  it("calls free Zen with Bearer public and the OpenCode user agent", async () => {
+    const model = findModel(snapshotCatalog(), "opencode", "big-pickle")!;
+    const calls: Array<{ url: string; authorization: string; agent: string; client: string }> = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      const headers = new Headers(init?.headers);
+      calls.push({
+        url: String(input),
+        authorization: headers.get("authorization") ?? "",
+        agent: headers.get("user-agent") ?? "",
+        client: headers.get("x-opencode-client") ?? "",
+      });
+      return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', { status: 200 });
+    };
+    try {
+      const events = [];
+      for await (const event of streamChat({
+        model,
+        apiKey: "",
+        system: "s",
+        messages: [{ role: "user", content: "hi" }],
+        tools: [],
+        sessionId: `ses_${"ab".repeat(32)}`,
+      })) {
+        events.push(event);
+      }
+      expect(calls[0]?.authorization).toBe("Bearer public");
+      expect(calls[0]?.agent).toBe("opencode/latest/1.19.4/opencode");
+      expect(calls[0]?.client).toBe("opencode");
+      expect(calls[0]?.url).toContain("opencode.ai/inference");
+      expect(events.some((event) => event.type === "text" && event.text === "ok")).toBe(true);
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });
 

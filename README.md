@@ -62,12 +62,12 @@ Then add testers in App Store Connect. The bundle id is `com.opencode.mobile`.
 
 ## Install the Android APK
 
-The release APK is a standalone app. The JavaScript bundle and Hermes bytecode are inside the file. After you install it, the phone does not need a computer, Metro, or a dev server. Model calls still go from the phone to OpenCode Zen or another provider API, so the phone needs a network connection and an API key. There is no on-device LLM in this build.
+The release APK is a standalone app. The JavaScript bundle and Hermes bytecode are inside the file. After you install it, the phone does not need a computer, Metro, or a dev server. Free OpenCode Zen models work on first launch with no API key: the app sends the same public client identity OpenCode desktop uses. There is no on-device LLM in this build. The phone still needs a network connection.
 
-1. Download [opencode-mobile-v0.1.0.apk](https://github.com/iboshka24/opencode-mobile/releases/download/v0.1.0/opencode-mobile-v0.1.0.apk) from the [v0.1.0 release](https://github.com/iboshka24/opencode-mobile/releases/tag/v0.1.0). The APK is arm64-v8a.
+1. Download [opencode-mobile-v0.2.0.apk](https://github.com/iboshka24/opencode-mobile/releases/download/v0.2.0/opencode-mobile-v0.2.0.apk) from the [v0.2.0 release](https://github.com/iboshka24/opencode-mobile/releases/tag/v0.2.0). The APK includes arm64-v8a and x86_64.
 2. On the phone, open the file. If Android asks, allow install from that source.
-3. Open **OpenCode**, then **Settings**, and paste an API key. OpenCode Zen free models use `OPENCODE_API_KEY`.
-4. Pick a model and send a message. The request leaves the phone and goes to that provider.
+3. Open **OpenCode** and send a message. The default model is the free Zen model `big-pickle`.
+4. Optional: open **Connect** for the same logins as desktop — OpenCode Console, GitHub Copilot device code, ChatGPT device code, and Claude. Paste an API key only for other providers.
 
 To build the same APK yourself you need JDK 17, the Android SDK (platform 37, build-tools 37, NDK 27.1), and Node 22:
 
@@ -76,13 +76,22 @@ npm ci
 npm run apk
 ```
 
-The script runs `expo prebuild -p android` and `gradlew assembleRelease`. It signs with the sideload keystore in `keystore/` (password `opencode-mobile`, alias `opencode`). That key is for direct install only. It is not a Play App Signing key. The APK is written to `dist/opencode-mobile-v0.1.0.apk`.
+The script runs `expo prebuild -p android` and `gradlew assembleRelease` for `arm64-v8a` and `x86_64`. It signs with the sideload keystore in `keystore/` (password `opencode-mobile`, alias `opencode`). That key is for direct install only. It is not a Play App Signing key. The APK is written to `dist/opencode-mobile-v0.2.0.apk`.
 
 Expo Go (`npx expo start`) still works for development. `eas build --platform android --profile preview` is the other way to get an APK.
 
 ## Provider setup
 
-Open **Settings** and paste a key. On iOS the key is one Keychain item per provider (`oc.k.<id>`), because a single item cannot hold every key. On Android it uses the keystore. The web preview uses `localStorage` and says so on the settings screen.
+Free OpenCode Zen models (`cost.input` and `cost.output` of 0, including `big-pickle`) are called with the public credential OpenCode uses when `OPENCODE_API_KEY` is unset. Paid Zen models stay hidden until you connect OpenCode Console or save a real key. Requests send `User-Agent: opencode/latest/1.19.4/opencode`, `x-opencode-client: opencode`, and the session affinity headers from OpenCode's model request.
+
+**Connect** mirrors `opencode auth login`:
+
+- OpenCode Console device code (`console.opencode.ai`, client `opencode-cli`)
+- GitHub Copilot device code (client `Ov23li8tweQw6odWQebz`, including an optional Enterprise domain)
+- ChatGPT / Codex device code (`auth.openai.com`, client `app_EMoamEEZ73f0CkXaXp7hrann`)
+- Claude Pro/Max: browser PKCE with a state that is independent of the verifier, then paste `code#state`
+
+A pasted key is still optional. On iOS each secret is one Keychain item (`oc.k.<id>`). On Android it uses the keystore. The web preview uses `localStorage` and says so on the settings screen.
 
 | Provider | Settings id | Env name OpenCode uses |
 | --- | --- | --- |
@@ -184,22 +193,26 @@ eas submit --platform ios --profile production
 
 ### Установка APK на Android
 
-Готовый APK — самостоятельное приложение: внутри JavaScript-бандл и Hermes. После установки компьютер, Metro и dev-сервер не нужны. Модель по-прежнему вызывается с телефона через API OpenCode Zen или другого провайдера из models.dev. Своей нейросети на устройстве в этой сборке нет.
+Готовый APK — самостоятельное приложение: внутри JavaScript-бандл и Hermes. После установки компьютер, Metro и dev-сервер не нужны. Бесплатные модели OpenCode Zen работают сразу, без API-ключа: приложение представляется так же, как клиент OpenCode desktop. Своей нейросети на устройстве в этой сборке нет. Нужна сеть.
 
-1. Скачайте [opencode-mobile-v0.1.0.apk](https://github.com/iboshka24/opencode-mobile/releases/download/v0.1.0/opencode-mobile-v0.1.0.apk) из [релиза v0.1.0](https://github.com/iboshka24/opencode-mobile/releases/tag/v0.1.0). Архитектура — arm64-v8a.
+1. Скачайте [opencode-mobile-v0.2.0.apk](https://github.com/iboshka24/opencode-mobile/releases/download/v0.2.0/opencode-mobile-v0.2.0.apk) из [релиза v0.2.0](https://github.com/iboshka24/opencode-mobile/releases/tag/v0.2.0). В APK есть arm64-v8a и x86_64.
 2. Откройте файл на телефоне и разрешите установку из этого источника.
-3. В приложении откройте **Settings** и вставьте API-ключ. Для бесплатных моделей OpenCode Zen это `OPENCODE_API_KEY`.
-4. Выберите модель и отправьте сообщение. Запрос уходит с телефона напрямую провайдеру.
+3. Откройте **OpenCode** и отправьте сообщение. Модель по умолчанию — бесплатная `big-pickle`.
+4. По желанию откройте **Connect**: те же входы, что в desktop — OpenCode Console, GitHub Copilot, ChatGPT и Claude. Ключ нужен только для остальных провайдеров.
 
-Собрать тот же APK: JDK 17, Android SDK (platform 37, build-tools 37, NDK 27.1), Node 22, затем `npm ci` и `npm run apk`. Подпись — keystore в `keystore/` (пароль `opencode-mobile`, alias `opencode`), только для прямой установки. Файл появится в `dist/opencode-mobile-v0.1.0.apk`.
+Собрать тот же APK: JDK 17, Android SDK (platform 37, build-tools 37, NDK 27.1), Node 22, затем `npm ci` и `npm run apk`. Подпись — keystore в `keystore/` (пароль `opencode-mobile`, alias `opencode`), только для прямой установки. Файл появится в `dist/opencode-mobile-v0.2.0.apk`. Архитектуры: arm64-v8a и x86_64.
 
 Для разработки по-прежнему можно `npx expo start` в Expo Go или `eas build --platform android --profile preview`.
 
 ### Ключи и модели
 
-В **Settings** вставьте ключ. На iPhone каждый провайдер — отдельная запись Keychain. На Android — keystore. В веб-превью ключи лежат в `localStorage`, экран настроек об этом пишет прямо.
+Бесплатные модели OpenCode Zen (стоимость входа и выхода 0, включая `big-pickle`) вызываются публичным доступом, как в OpenCode, когда `OPENCODE_API_KEY` не задан. Платные модели Zen скрыты, пока нет входа в Console или настоящего ключа. Запросы несут `User-Agent: opencode/latest/1.19.4/opencode`, `x-opencode-client: opencode` и заголовки сессии.
 
-Поддерживаются OpenCode Zen и его бесплатные модели (по умолчанию `opencode/big-pickle`), OpenCode Go, Anthropic, OpenAI, Google, OpenRouter, DeepSeek, Groq, xAI, Mistral и любой совместимый с OpenAI endpoint (свой base URL и протокол `openai` / `anthropic` / `google`). Каталог грузится из снимка models.dev и обновляется с `https://models.dev/api.json`. В чате есть стриминг, вызов инструментов, блок рассуждений и счётчик токенов и стоимости.
+**Connect** повторяет `opencode auth login`: device code Console, GitHub Copilot (и Enterprise), ChatGPT/Codex и Claude (PKCE, state отдельно от verifier, затем вставка `code#state`).
+
+Ключ по-прежнему можно вставить для других провайдеров. На iPhone каждый секрет — отдельная запись Keychain. На Android — keystore. В веб-превью секреты лежат в `localStorage`.
+
+Поддерживаются OpenCode Zen и OpenCode Go, Anthropic, OpenAI, Google, OpenRouter, DeepSeek, Groq, xAI, Mistral, GitHub Copilot после входа и любой совместимый с OpenAI endpoint. Каталог грузится из снимка models.dev и обновляется с `https://models.dev/api.json`. В чате есть стриминг, карточки инструментов, diff и счётчик токенов.
 
 Для git нужен GitHub-токен. Поиск в вебе идёт с устройства через DuckDuckGo; ключ Brave необязателен.
 

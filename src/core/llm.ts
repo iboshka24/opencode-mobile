@@ -1,5 +1,7 @@
+import { CODEX_BASE_URL, COPILOT_API_VERSION, formatHttpError } from "./auth";
 import { chatCompletionsUrl, endpointFor, type CatalogModel } from "./catalog";
 import { emptyUsage, type TokenUsage } from "./cost";
+import { isZenProvider, missingKeyMessage, OPENCODE_USER_AGENT, PUBLIC_ZEN_KEY, resolveApiKey, sessionAffinity, zenHeaders, type ChatAuth } from "./identity";
 
 export interface ToolCall {
   id: string;
@@ -33,6 +35,10 @@ export interface ChatRequest {
   messages: ModelMessage[];
   tools: JsonTool[];
   signal?: AbortSignal;
+  sessionId?: string;
+  headers?: Record<string, string>;
+  auth?: ChatAuth;
+  accountId?: string;
 }
 
 export interface ScriptedStep {
@@ -154,8 +160,7 @@ export function toGeminiContents(messages: ModelMessage[]) {
 }
 
 async function readError(response: Response): Promise<string> {
-  const text = await response.text();
-  return text.slice(0, 800);
+  return formatHttpError(response.status, await response.text());
 }
 
 export async function* iterateSseData(response: Response): AsyncGenerator<string> {
@@ -204,29 +209,59 @@ interface PartialTool {
 }
 
 export async function* streamChat(request: ChatRequest): AsyncGenerator<ChatEvent> {
-  if (!request.apiKey) throw new Error("Missing API key for this provider.");
-  if (request.model.protocol === "anthropic") yield* streamAnthropic(request);
-  else if (request.model.protocol === "google") yield* streamGemini(request);
-  else yield* streamOpenAI(request);
+  const apiKey = resolveApiKey(request.model, request.apiKey);
+  if (!apiKey) throw new Error(missingKeyMessage(request.model));
+  const next: ChatRequest = {
+    ...request,
+    apiKey,
+    auth: request.auth ?? (apiKey === PUBLIC_ZEN_KEY ? "public" : "api"),
+  };
+  if (next.auth === "codex") {
+    yield* streamCodex(next);
+    return;
+  }
+  if (next.model.protocol === "anthropic") yield* streamAnthropic(next);
+  else if (next.model.protocol === "google") yield* streamGemini(next);
+  else yield* streamOpenAI(next);
+}
+
+function requestHeaders(request: ChatRequest): Record<string, string> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${request.apiKey}`,
+    "Content-Type": "application/json",
+  };
+  if (isZenProvider(request.model.providerID)) {
+    Object.assign(headers, zenHeaders(request.sessionId || "mobile"));
+    headers.Authorization = `Bearer ${request.apiKey}`;
+  }
+  if (request.auth === "copilot") {
+    headers["User-Agent"] = OPENCODE_USER_AGENT;
+    headers["Openai-Intent"] = "conversation-edits";
+    headers["X-GitHub-Api-Version"] = COPILOT_API_VERSION;
+    headers["x-initiator"] = "user";
+  }
+  if (request.model.providerID === "openrouter") {
+    headers["HTTP-Referer"] = "https://github.com/iboshka24/opencode-mobile";
+    headers["X-Title"] = "OpenCode Mobile";
+  }
+  if (request.headers) Object.assign(headers, request.headers);
+  return headers;
 }
 
 async function* streamOpenAI(request: ChatRequest): AsyncGenerator<ChatEvent> {
   const base = endpointFor(request.model, request.baseUrl);
   if (!base) throw new Error(`No API base URL for ${request.model.providerID}. Set a custom endpoint in Settings.`);
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${request.apiKey}`,
-    "Content-Type": "application/json",
-  };
-  if (request.model.providerID === "openrouter") {
-    headers["HTTP-Referer"] = "https://github.com/iboshka24/opencode-mobile";
-    headers["X-Title"] = "OpenCode Mobile";
-  }
+  const headers = requestHeaders(request);
   const body: Record<string, unknown> = {
     model: request.model.id,
     messages: toOpenAIMessages(request.system, request.messages),
     stream: true,
     stream_options: { include_usage: true },
   };
+  if (isZenProvider(request.model.providerID)) {
+    const affinity = sessionAffinity(request.sessionId || "mobile");
+    body.prompt_cache_key = affinity.startsWith("ses_") ? affinity.slice(4) : affinity;
+  }
   if (request.model.temperature) body.temperature = 0.2;
   if (request.tools.length && request.model.toolCall) {
     body.tools = request.tools.map((tool) => ({
@@ -240,7 +275,7 @@ async function* streamOpenAI(request: ChatRequest): AsyncGenerator<ChatEvent> {
     body: JSON.stringify(body),
     signal: request.signal,
   });
-  if (!response.ok) throw new Error(`HTTP ${response.status} from ${request.model.providerID}: ${await readError(response)}`);
+  if (!response.ok) throw new Error(`${request.model.providerID}: ${await readError(response)}`);
   const partials = new Map<number, PartialTool>();
   let finish = "stop";
   for await (const data of iterateSseData(response)) {
@@ -288,14 +323,20 @@ async function* streamOpenAI(request: ChatRequest): AsyncGenerator<ChatEvent> {
 
 async function* streamAnthropic(request: ChatRequest): AsyncGenerator<ChatEvent> {
   const base = endpointFor(request.model, request.baseUrl);
+  const headers: Record<string, string> = {
+    "anthropic-version": "2023-06-01",
+    "content-type": "application/json",
+  };
+  if (request.auth === "oauth") {
+    headers.Authorization = `Bearer ${request.apiKey}`;
+    headers["anthropic-beta"] = "oauth-2025-04-20";
+  } else {
+    headers["x-api-key"] = request.apiKey;
+  }
   const response = await fetch(`${base}/v1/messages`, {
     method: "POST",
     signal: request.signal,
-    headers: {
-      "x-api-key": request.apiKey,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
+    headers,
     body: JSON.stringify({
       model: request.model.id,
       max_tokens: outputTokens(request.model),
@@ -313,7 +354,7 @@ async function* streamAnthropic(request: ChatRequest): AsyncGenerator<ChatEvent>
         : {}),
     }),
   });
-  if (!response.ok) throw new Error(`HTTP ${response.status} from Anthropic: ${await readError(response)}`);
+  if (!response.ok) throw new Error(`Anthropic: ${await readError(response)}`);
   let current: PartialTool | null = null;
   let finish = "end_turn";
   const usage = emptyUsage();
@@ -385,7 +426,7 @@ async function* streamGemini(request: ChatRequest): AsyncGenerator<ChatEvent> {
         : {}),
     }),
   });
-  if (!response.ok) throw new Error(`HTTP ${response.status} from Google: ${await readError(response)}`);
+  if (!response.ok) throw new Error(`Google: ${await readError(response)}`);
   let finish = "STOP";
   for await (const data of iterateSseData(response)) {
     const json = JSON.parse(data) as {
@@ -420,4 +461,61 @@ async function* streamGemini(request: ChatRequest): AsyncGenerator<ChatEvent> {
     }
   }
   yield { type: "done", finishReason: finish };
+}
+
+function toResponsesInput(messages: ModelMessage[]): Array<{ role: "user" | "assistant"; content: string }> {
+  const input: Array<{ role: "user" | "assistant"; content: string }> = [];
+  for (const message of messages) {
+    if (message.local) continue;
+    if (message.role === "user") input.push({ role: "user", content: message.content });
+    else if (message.role === "assistant") {
+      const tools = (message.toolCalls ?? []).map((call) => `${call.name} ${call.arguments}`).join("\n");
+      const content = [message.content, tools].filter(Boolean).join("\n");
+      if (content) input.push({ role: "assistant", content });
+    } else input.push({ role: "user", content: `Tool ${message.name} result:\n${message.content}` });
+  }
+  return input;
+}
+
+async function* streamCodex(request: ChatRequest): AsyncGenerator<ChatEvent> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${request.apiKey}`,
+    "Content-Type": "application/json",
+    "User-Agent": OPENCODE_USER_AGENT,
+    originator: "opencode",
+    "x-codex-beta-features": "remote_compaction_v2",
+    ...(request.accountId ? { "chatgpt-account-id": request.accountId } : {}),
+    ...(request.sessionId ? { "session-id": sessionAffinity(request.sessionId) } : {}),
+    ...(request.headers ?? {}),
+  };
+  const response = await fetch(`${CODEX_BASE_URL}/responses`, {
+    method: "POST",
+    signal: request.signal,
+    headers,
+    body: JSON.stringify({
+      model: request.model.id,
+      instructions: request.system,
+      input: toResponsesInput(request.messages),
+      stream: true,
+      store: false,
+    }),
+  });
+  if (!response.ok) throw new Error(`ChatGPT: ${await readError(response)}`);
+  for await (const data of iterateSseData(response)) {
+    const json = JSON.parse(data) as {
+      type?: string;
+      delta?: string;
+      response?: { usage?: { input_tokens?: number; output_tokens?: number } };
+    };
+    if ((json.type === "response.output_text.delta" || json.type === "response.reasoning_summary_text.delta") && json.delta) {
+      yield { type: json.type.includes("reasoning") ? "reasoning" : "text", text: json.delta };
+    }
+    if (json.type === "response.completed" && json.response?.usage) {
+      yield {
+        type: "usage",
+        usage: { input: json.response.usage.input_tokens ?? 0, output: json.response.usage.output_tokens ?? 0 },
+      };
+    }
+  }
+  yield { type: "done", finishReason: "stop" };
 }

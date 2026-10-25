@@ -10,6 +10,7 @@ export ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
 export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
 export NODE_ENV=production
+export CI="${CI:-1}"
 
 if [[ ! -x "$JAVA_HOME/bin/java" ]]; then
   echo "JDK 17 not found at $JAVA_HOME" >&2
@@ -26,17 +27,15 @@ if [[ -x "$SDKMANAGER" ]]; then
     "ndk;27.1.12297006"
 fi
 
-if [[ ! -d android ]]; then
-  npx expo prebuild -p android --no-install
-fi
+npx expo prebuild -p android --no-install
 
 python3 scripts/apply-release-signing.py
 
 PROP="android/gradle.properties"
 if grep -q '^reactNativeArchitectures=' "$PROP"; then
-  sed -i 's/^reactNativeArchitectures=.*/reactNativeArchitectures=arm64-v8a/' "$PROP"
+  sed -i 's/^reactNativeArchitectures=.*/reactNativeArchitectures=arm64-v8a,x86_64/' "$PROP"
 else
-  echo 'reactNativeArchitectures=arm64-v8a' >> "$PROP"
+  echo 'reactNativeArchitectures=arm64-v8a,x86_64' >> "$PROP"
 fi
 if ! grep -q '^org.gradle.jvmargs=' "$PROP"; then
   echo 'org.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8' >> "$PROP"

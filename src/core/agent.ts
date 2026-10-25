@@ -1,5 +1,6 @@
 import type { CatalogModel } from "./catalog";
 import { addUsage, emptyUsage, type TokenUsage } from "./cost";
+import type { ChatAuth } from "./identity";
 import { streamChat, type ChatEvent, type ChatRequest, type ModelMessage, type ToolCall } from "./llm";
 import { executeTool, type ToolContext } from "./tools";
 import type { JsonTool } from "./tools";
@@ -25,6 +26,10 @@ export interface AgentInput {
   signal?: AbortSignal;
   maxSteps?: number;
   onEvent?: (event: AgentEvent) => void;
+  sessionId?: string;
+  headers?: Record<string, string>;
+  auth?: ChatAuth;
+  accountId?: string;
 }
 
 function parseArgs(raw: string): unknown {
@@ -55,6 +60,10 @@ export async function runAgent(input: AgentInput): Promise<{ messages: ModelMess
         messages,
         tools: input.model.toolCall ? input.tools : [],
         signal: input.signal,
+        sessionId: input.sessionId,
+        headers: input.headers,
+        auth: input.auth,
+        accountId: input.accountId,
       };
       for await (const event of chat(request)) {
         if (event.type === "text") {

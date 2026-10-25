@@ -29,7 +29,7 @@ export default function TabLayout() {
       <Tabs.Screen name="index" options={{ title: "Chat" }} />
       <Tabs.Screen name="files" options={{ title: "Files" }} />
       <Tabs.Screen name="diff" options={{ title: "Diff" }} />
-      <Tabs.Screen name="sessions" options={{ title: "Sessions" }} />
+      <Tabs.Screen name="sessions" options={{ href: null, title: "Sessions" }} />
       <Tabs.Screen name="settings" options={{ title: "Settings" }} />
     </Tabs>
   );

@@ -25,6 +25,7 @@ const HELP = [
   "/compact — summarize the session",
   "/new — start a session",
   "/help — this list",
+  "Free OpenCode Zen models work with no API key. Connect Console, Copilot, ChatGPT, or Claude from the connect screen.",
 ].join("\n");
 
 export function helpText(): string {
