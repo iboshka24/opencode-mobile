@@ -5,6 +5,7 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AppProvider, useApp } from "../runtime/state";
 import { mono } from "../ui/theme";
+import { Welcome } from "../ui/welcome";
 
 function Shell() {
   const app = useApp();
@@ -48,6 +49,7 @@ function Shell() {
           </View>
         ) : null}
         {app.question ? <QuestionCard /> : null}
+        {app.welcome ? <Welcome /> : null}
       </View>
     </View>
   );

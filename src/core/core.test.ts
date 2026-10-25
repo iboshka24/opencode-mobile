@@ -13,9 +13,12 @@ import {
   parseDeviceToken,
   parseOpenAIDevice,
   parseOpenAIDeviceToken,
+  CONSOLE_SERVER,
+  loadConsoleAccount,
 } from "./auth";
 import { findModel, isFree, parseCatalog, protocolFor, snapshotCatalog } from "./catalog";
-import { modelVisible, PUBLIC_ZEN_KEY, resolveApiKey, sessionAffinity, sha256Hex, zenHeaders } from "./identity";
+import { modelKey, modelVisible, nextFreeModel, PUBLIC_ZEN_KEY, resolveApiKey, sessionAffinity, sha256Hex, zenHeaders } from "./identity";
+import { classifyProviderError } from "./provider-error";
 import { streamChat } from "./llm";
 import { parseSlash } from "./commands";
 import { formatCost, usageCost } from "./cost";
@@ -288,15 +291,48 @@ describe("zen auth", () => {
   });
 
   it("builds the OpenCode client headers", () => {
-    const headers = zenHeaders("ses_" + "ab".repeat(32));
+    const headers = zenHeaders("ses_" + "ab".repeat(32), "mobile", "org_1");
     expect(headers["User-Agent"]).toBe("opencode/latest/1.19.4/opencode");
     expect(headers["x-opencode-client"]).toBe("opencode");
     expect(headers["x-opencode-session"]).toBe("ses_" + "ab".repeat(32));
+    expect(headers["x-org-id"]).toBe("org_1");
     expect(sessionAffinity("legacy")).toMatch(/^ses_[0-9a-f]{64}$/);
+    expect(CONSOLE_SERVER).toBe("https://opencode.ai/console");
+  });
+
+  it("stores the Console org the access token belongs to", async () => {
+    const fetchImpl = (async (url: string | URL) => {
+      const path = String(url);
+      const body = path.endsWith("/api/user")
+        ? { id: "usr_1", email: "user@example.com" }
+        : [
+            { id: "org_b", name: "Beta" },
+            { id: "org_a", name: "Alpha" },
+          ];
+      return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    const preferred = await loadConsoleAccount("access-token", "org_b", fetchImpl);
+    expect(preferred).toEqual({ email: "user@example.com", orgId: "org_b", orgName: "Beta" });
+    const first = await loadConsoleAccount("access-token", undefined, fetchImpl);
+    expect(first.orgId).toBe("org_a");
+  });
+
+  it("explains shared free limits and skips country-blocked models", () => {
+    expect(classifyProviderError("opencode: HTTP 429: Free usage limit reached", false).kind).toBe("free-limit");
+    expect(classifyProviderError("opencode: HTTP 429: Free usage limit reached", false).message).toMatch(/Sign in/);
+    expect(classifyProviderError("HTTP 403: This model is not available in your country", true).kind).toBe("region");
+    const models = snapshotCatalog();
+    const blocked = new Set([modelKey({ providerID: "opencode", id: "big-pickle" })]);
+    const next = nextFreeModel(models, {}, blocked, { providerID: "opencode", id: "big-pickle" });
+    expect(next?.id).not.toBe("big-pickle");
+    expect(next && isFree(next)).toBe(true);
   });
 
   it("parses Console, Copilot, and ChatGPT device responses", () => {
     expect(parseConsoleDevice({ device_code: "d", user_code: "ABCD-1234", verification_uri_complete: "https://console.opencode.ai/auth", interval: 5, expires_in: 600 }).userCode).toBe("ABCD-1234");
+    expect(parseConsoleDevice({ device_code: "d", user_code: "HQPB-QMKJ", verification_uri_complete: "/console/device?user_code=HQPB-QMKJ&client_id=opencode-cli", interval: 5 }).verificationUrl).toBe(
+      "https://opencode.ai/console/device?user_code=HQPB-QMKJ&client_id=opencode-cli",
+    );
     expect(parseCopilotDevice({ device_code: "d", user_code: "GH-1", verification_uri: "https://github.com/login/device", interval: 5 }).verificationUrl).toContain("github.com");
     expect(parseDeviceToken({ error: "authorization_pending" })).toEqual({ status: "pending" });
     expect(parseDeviceToken({ access_token: "tok", refresh_token: "ref", expires_in: 3600, org_id: "org" })).toMatchObject({ status: "ok", access: "tok", orgId: "org" });

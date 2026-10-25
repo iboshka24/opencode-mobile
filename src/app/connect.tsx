@@ -13,6 +13,7 @@ import {
   startCopilotLogin,
   startOpenAILogin,
   copilotProfile,
+  loadConsoleAccount,
   anthropicLogin,
   parseAnthropicCode,
   type DevicePoll,
@@ -79,10 +80,9 @@ export default function ConnectScreen() {
       setStatus("Enter this code on the OpenCode page.");
       void Linking.openURL(device.verificationUrl);
       const token = await pollDevice(device.intervalSec, (signal) => pollConsoleLogin(device.deviceCode, fetch, signal));
-      await app.setSecret("opencode", token.access);
-      if (token.refresh) await app.setSecret("opencode.refresh", token.refresh);
-      await app.setSecret("opencode.mode", "console");
-      await finish("OpenCode Console");
+      const account = await loadConsoleAccount(token.access, token.orgId);
+      await app.saveConsoleLogin({ access: token.access, refresh: token.refresh, orgId: account.orgId ?? token.orgId, email: account.email });
+      await finish(account.email ? `OpenCode (${account.email})` : "OpenCode");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
       setBusy(null);
@@ -101,8 +101,7 @@ export default function ConnectScreen() {
       const token = await pollDevice(device.intervalSec, (signal) => pollCopilotLogin(device.deviceCode, enterprise, fetch, signal));
       const profile = await copilotProfile(token.access, enterprise);
       if (profile.error) throw new Error(profile.error);
-      await app.setSecret("github-copilot", token.access);
-      if (profile.apiEndpoint) await app.setSecret("github-copilot.api", profile.apiEndpoint);
+      await app.saveCopilotLogin({ access: token.access, api: profile.apiEndpoint });
       await finish("GitHub Copilot");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));

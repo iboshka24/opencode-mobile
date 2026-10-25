@@ -22,6 +22,8 @@ export default function ChatScreen() {
   const tokens = app.active.usage.input + app.active.usage.output;
   const key = app.model ? resolveApiKey(app.model, app.secrets[app.model.providerID]) : "";
   const publicZen = Boolean(app.model && isZenProvider(app.model.providerID) && key === PUBLIC_ZEN_KEY);
+  const signedIn = hasRealCredential(app.secrets.opencode) && app.secrets["opencode.mode"] === "console";
+  const accountLabel = signedIn ? app.secrets["opencode.email"] || "OpenCode account" : publicZen ? "shared network" : app.model ? app.model.providerName : "OpenCode";
   const commands = text.startsWith("/")
     ? ["/help", "/plan", "/build", "/init", "/review", "/model", "/theme", "/undo", "/cost", "/compact", "/new"].filter((item) => item.startsWith(text.trim()))
     : [];
@@ -37,12 +39,12 @@ export default function ChatScreen() {
             {app.active.title}
           </Text>
           <Text style={{ color: theme.muted, fontFamily: mono, fontSize: 11 }} numberOfLines={1}>
-            {publicZen ? "Zen · no key" : app.model ? app.model.providerName : "OpenCode"} · {formatTokens(tokens)} tok · {formatCost(app.active.cost)}
+            {accountLabel} · {formatTokens(tokens)} tok · {formatCost(app.active.cost)}
           </Text>
         </View>
-        <Pressable onPress={() => router.push("/connect")}>
-          <Text style={{ color: hasRealCredential(app.secrets.opencode) || hasRealCredential(app.secrets["github-copilot"]) ? theme.green : theme.accent, fontFamily: mono, fontSize: 12 }}>
-            connect
+        <Pressable onPress={() => (signedIn || hasRealCredential(app.secrets["github-copilot"]) ? router.push("/connect") : app.reopenWelcome())}>
+          <Text style={{ color: signedIn || hasRealCredential(app.secrets["github-copilot"]) ? theme.green : theme.accent, fontFamily: mono, fontSize: 12 }}>
+            {signedIn || hasRealCredential(app.secrets["github-copilot"]) ? "account" : "sign in"}
           </Text>
         </Pressable>
       </View>
@@ -52,7 +54,9 @@ export default function ChatScreen() {
           <View style={{ gap: 12, paddingTop: 28 }}>
             <Text style={{ color: theme.fg, fontFamily: mono, fontSize: 28 }}>OpenCode</Text>
             <Text style={{ color: theme.muted, fontFamily: mono, fontSize: 14, lineHeight: 22 }}>
-              Free Zen models are ready on this phone. No API key. The agent runs in the app and calls OpenCode the same way the desktop app does.
+              {signedIn
+                ? "You are signed in to OpenCode. Free models use your account."
+                : "Sign in so free models use your account. Without an account, Zen shares one allowance for the whole network."}
             </Text>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
               {SUGGESTIONS.map((item) => (
@@ -67,7 +71,30 @@ export default function ChatScreen() {
           <MessageView key={`${block.message.role}-${index}`} message={block.message} tools={block.tools} />
         ))}
         {app.draft ? <DraftView /> : null}
-        {app.error ? <Text style={{ color: theme.red, fontFamily: mono, fontSize: 12 }}>{app.error}</Text> : null}
+        {app.notice ? (
+          <View style={{ borderWidth: 1, borderColor: theme.border, backgroundColor: theme.bgElev, borderRadius: 14, padding: 12, gap: 8 }}>
+            <Text style={{ color: theme.yellow, fontFamily: mono, fontSize: 13 }}>{app.notice.title}</Text>
+            <Text style={{ color: theme.fg, fontFamily: mono, fontSize: 13, lineHeight: 20 }}>{app.notice.message}</Text>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
+              <Pressable onPress={() => void app.retry()}>
+                <Text style={{ color: theme.accent, fontFamily: mono }}>Retry</Text>
+              </Pressable>
+              <Pressable onPress={() => router.push("/models")}>
+                <Text style={{ color: theme.fg, fontFamily: mono }}>Switch model</Text>
+              </Pressable>
+              {app.notice.kind === "free-limit" && !signedIn ? (
+                <Pressable onPress={app.reopenWelcome}>
+                  <Text style={{ color: theme.green, fontFamily: mono }}>Sign in</Text>
+                </Pressable>
+              ) : null}
+              {app.notice.kind === "free-limit" ? (
+                <Pressable onPress={() => router.push("/connect")}>
+                  <Text style={{ color: theme.fg, fontFamily: mono }}>GitHub Copilot</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
       </ScrollView>
 
       {app.active.todos.length ? (
@@ -204,6 +231,7 @@ function blocks(messages: ModelMessage[]) {
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index]!;
     if (message.role === "tool") continue;
+    if (message.local && message.role === "assistant" && message.content.startsWith("Request failed:")) continue;
     const tools: Extract<ModelMessage, { role: "tool" }>[] = [];
     if (message.role === "assistant") {
       let cursor = index + 1;

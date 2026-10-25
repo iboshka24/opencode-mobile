@@ -3,7 +3,7 @@
     "name": "OpenCode",
     "slug": "opencode-mobile",
     "scheme": "opencode",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -20,7 +20,7 @@
       }
     },
     "android": {
-      "versionCode": 2,
+      "versionCode": 3,
       "package": "com.opencode.mobile",
       "adaptiveIcon": {
         "backgroundColor": "#1a1b26",

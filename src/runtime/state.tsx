@@ -6,7 +6,8 @@ import { findModel, isFree, MODELS_DEV_URL, parseCatalog, snapshotCatalog, type 
 import { helpText, parseSlash } from "../core/commands";
 import { addUsage, emptyUsage, usageCost, type TokenUsage } from "../core/cost";
 import { unifiedDiff } from "../core/difftext";
-import { chatAuth, copilotModels, isZenProvider, missingKeyMessage, modelVisible, newSessionId, resolveApiKey, zenHeaders } from "../core/identity";
+import { chatAuth, copilotModels, hasRealCredential, isZenProvider, missingKeyMessage, modelKey, modelVisible, newSessionId, nextFreeModel, resolveApiKey, zenHeaders } from "../core/identity";
+import { classifyProviderError, type ProviderNotice } from "../core/provider-error";
 import { scriptedModel, type ModelMessage } from "../core/llm";
 import { buildSystemPrompt, initPrompt, reviewPrompt } from "../core/prompt";
 import { workspaceIsGit } from "../core/git";
@@ -74,6 +75,8 @@ interface Persisted {
   customProviders: CustomProvider[];
   gitAuthor: { name: string; email: string };
   secretIds: string[];
+  onboarded?: boolean;
+  blockedModels?: string[];
 }
 
 interface AppValue {
@@ -96,8 +99,17 @@ interface AppValue {
   sending: boolean;
   draft: Draft | null;
   error: string;
+  notice: ProviderNotice | null;
+  dismissNotice: () => void;
+  retry: () => void;
   send: (text: string) => Promise<void>;
   stop: () => void;
+  welcome: boolean;
+  dismissWelcome: () => void;
+  reopenWelcome: () => void;
+  saveConsoleLogin: (input: { access: string; refresh?: string; orgId?: string; email?: string }) => Promise<void>;
+  saveCopilotLogin: (input: { access: string; api?: string }) => Promise<void>;
+  blockedModels: string[];
   permission: PermissionPrompt | null;
   answerPermission: (value: "allow" | "deny" | "always") => void;
   question: QuestionPrompt | null;
@@ -162,12 +174,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [sending, setSending] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState<ProviderNotice | null>(null);
+  const [onboarded, setOnboarded] = useState(false);
+  const [blockedModels, setBlockedModels] = useState<string[]>([]);
   const [permission, setPermissionPrompt] = useState<PermissionPrompt | null>(null);
   const [question, setQuestion] = useState<QuestionPrompt | null>(null);
   const [filesVersion, setFilesVersion] = useState(0);
   const [routeRequest, setRouteRequest] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const secretIds = useRef<string[]>([]);
+  const blockedRef = useRef<Set<string>>(new Set());
+  const lastPrompt = useRef("");
 
   const models = useMemo(() => {
     const custom = customProviders.flatMap((provider) =>
@@ -191,9 +208,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [baseModels, customProviders, secrets]);
 
   const active = sessions.find((session) => session.id === activeId) ?? sessions[0]!;
+  const blocked = useMemo(() => new Set(blockedModels), [blockedModels]);
+  const usable = (item: CatalogModel | undefined) => Boolean(item && modelVisible(item, secrets) && !blocked.has(modelKey(item)));
   const picked = findModel(models, active.providerID, active.modelID);
-  const freeZen = findModel(models, "opencode", "big-pickle") ?? models.find((item) => item.providerID === "opencode" && isFree(item));
-  const model = picked && modelVisible(picked, secrets) ? picked : freeZen && modelVisible(freeZen, secrets) ? freeZen : picked ?? freeZen ?? models[0] ?? null;
+  const freeZen = nextFreeModel(models, secrets, blocked) ?? findModel(models, "opencode", "big-pickle");
+  const model = usable(picked) ? picked! : usable(freeZen) ? freeZen! : picked ?? freeZen ?? models[0] ?? null;
+  const signedIn = hasRealCredential(secrets.opencode) && secrets["opencode.mode"] === "console";
+  const welcome = ready && !onboarded && !signedIn && !hasRealCredential(secrets["github-copilot"]);
   const theme = themeById(themeId);
 
   const patchSession = (id: string, recipe: (session: Session) => Session) => {
@@ -219,6 +240,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       let nextCustom: CustomProvider[] = [];
       let nextAuthor = { name: "OpenCode Mobile", email: "mobile@opencode.local" };
       let ids: string[] = [];
+      let nextOnboarded = false;
+      let nextBlocked: string[] = [];
       if (raw) {
         try {
           const saved = JSON.parse(raw) as Persisted;
@@ -231,6 +254,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           nextCustom = saved.customProviders ?? [];
           nextAuthor = saved.gitAuthor ?? nextAuthor;
           ids = saved.secretIds ?? [];
+          nextOnboarded = Boolean(saved.onboarded);
+          nextBlocked = saved.blockedModels ?? [];
         } catch {
           // Keep the fresh session if the saved file is unreadable.
         }
@@ -252,6 +277,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setCustomProviders(nextCustom);
       setGitAuthorState(nextAuthor);
       setSecrets(loaded);
+      setOnboarded(nextOnboarded);
+      blockedRef.current = new Set(nextBlocked);
+      setBlockedModels(nextBlocked);
       setReady(true);
       void refresh(setBaseModels, setCatalogStatus);
     })();
@@ -275,9 +303,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       customProviders,
       gitAuthor,
       secretIds: secretIds.current,
+      onboarded,
+      blockedModels,
     };
     void writeState(JSON.stringify(payload));
-  }, [ready, themeId, permissions, sessions, activeId, customProviders, gitAuthor, active.providerID, active.modelID]);
+  }, [ready, themeId, permissions, sessions, activeId, customProviders, gitAuthor, active.providerID, active.modelID, onboarded, blockedModels]);
 
   const refreshCatalog = async () => {
     await refresh(setBaseModels, setCatalogStatus);
@@ -376,8 +406,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const refreshFiles = () => setFilesVersion((value) => value + 1);
 
-  const runTurn = async (session: Session, text: string, chat?: Parameters<typeof runAgent>[0]["chat"]) => {
-    if (!workspace || !model) return;
+  const runTurn = async (
+    session: Session,
+    text: string,
+    chat?: Parameters<typeof runAgent>[0]["chat"],
+    options?: { model?: CatalogModel; regionRetry?: boolean },
+  ): Promise<boolean> => {
+    const chosen = options?.model ?? model;
+    if (!workspace || !chosen) return false;
     const controller = new AbortController();
     abortRef.current = controller;
     setSending(true);
@@ -395,9 +431,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const instructions = await agents(workspace);
       const git = await workspaceIsGit(workspace);
       const system = buildSystemPrompt({
-        modelId: model.id,
-        modelName: model.name,
-        providerID: model.providerID,
+        modelId: chosen.id,
+        modelName: chosen.name,
+        providerID: chosen.providerID,
         toolNames: toolNames(session.mode),
         workspaceLabel,
         git,
@@ -408,12 +444,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const result = await runAgent({
         system,
         messages: history,
-        model,
-        apiKey: resolveApiKey(model, secrets[model.providerID]),
-        baseUrl: secrets["openai.mode"] === "codex" && model.providerID === "openai" ? CODEX_BASE_URL : model.api,
+        model: chosen,
+        apiKey: resolveApiKey(chosen, secrets[chosen.providerID]),
+        baseUrl: secrets["openai.mode"] === "codex" && chosen.providerID === "openai" ? CODEX_BASE_URL : chosen.api,
         sessionId: session.id,
-        headers: isZenProvider(model.providerID) ? zenHeaders(session.id) : undefined,
-        auth: chatAuth(model.providerID, secrets, resolveApiKey(model, secrets[model.providerID])),
+        headers: isZenProvider(chosen.providerID) ? zenHeaders(session.id, "mobile", secrets["opencode.org"]) : undefined,
+        auth: chatAuth(chosen.providerID, secrets, resolveApiKey(chosen, secrets[chosen.providerID])),
         accountId: secrets["openai.account"],
         tools: toolDefinitions(session.mode),
         signal: controller.signal,
@@ -434,7 +470,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         onEvent: (event) => {
           if (event.type === "usage") {
             usage = addUsage(usage, event.usage);
-            cost += usageCost(model, event.usage);
+            cost += usageCost(chosen, event.usage);
           }
           setDraft((current) => {
             const next = current ?? { reasoning: "", text: "", tools: [] };
@@ -465,23 +501,66 @@ export function AppProvider({ children }: { children: ReactNode }) {
         updatedAt: Date.now(),
       }));
       setPermissions(policy);
+      setNotice(null);
       await persistWebWorkspace(workspace);
       refreshFiles();
+      return true;
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
-      if (message !== "Stopped") setError(message);
-      patchSession(session.id, (current) => ({
-        ...current,
-        messages: [
-          ...history,
-          { role: "assistant", content: message === "Stopped" ? "Stopped." : `Request failed: ${message}`, local: true },
-        ],
-        todos,
-        changes,
-        usage,
-        cost,
-        updatedAt: Date.now(),
-      }));
+      if (message === "Stopped") {
+        patchSession(session.id, (current) => ({
+          ...current,
+          messages: [...history, { role: "assistant", content: "Stopped.", local: true }],
+          todos,
+          changes,
+          usage,
+          cost,
+          updatedAt: Date.now(),
+        }));
+        return false;
+      } else {
+        const failure = classifyProviderError(message, signedIn);
+        if (failure.kind === "region" && !options?.regionRetry) {
+          const nextBlocked = new Set(blockedRef.current);
+          nextBlocked.add(modelKey(chosen));
+          blockedRef.current = nextBlocked;
+          setBlockedModels([...nextBlocked]);
+          const next = nextFreeModel(models, secrets, nextBlocked, chosen);
+          if (next) {
+            setNotice({
+              kind: "region",
+              title: "Not available in your country",
+              message: `${chosen.name} is blocked here. Switched to ${next.name}.`,
+            });
+            patchSession(session.id, (current) => ({ ...current, providerID: next.providerID, modelID: next.id }));
+            const switched = await runTurn({ ...session, providerID: next.providerID, modelID: next.id }, text, chat, { model: next, regionRetry: true });
+            if (switched) {
+              setNotice({
+                kind: "region",
+                title: "Not available in your country",
+                message: `${chosen.name} is blocked here. Switched to ${next.name}.`,
+              });
+            }
+            return switched;
+          }
+        }
+        setError("");
+        setNotice(
+          failure.kind === "region"
+            ? { ...failure, message: `${chosen.name} is not available in your country. Pick another free model.` }
+            : failure,
+        );
+        patchSession(session.id, (current) => ({
+          ...current,
+          messages: history,
+          todos,
+          changes,
+          usage,
+          cost,
+          updatedAt: Date.now(),
+        }));
+        return false;
+      }
     } finally {
       setDraft(null);
       setSending(false);
@@ -579,7 +658,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
       pushLocal(missingKeyMessage(model));
       return;
     }
+    lastPrompt.current = prompt;
+    setNotice(null);
     await runTurn({ ...active, messages: active.messages }, prompt);
+  };
+
+  const retry = async () => {
+    const prompt = lastPrompt.current;
+    if (!prompt || sending || !model) return;
+    setNotice(null);
+    const last = active.messages.at(-1);
+    const base = last?.role === "user" && last.content === prompt ? active.messages.slice(0, -1) : active.messages;
+    await runTurn({ ...active, messages: base }, prompt);
+  };
+
+  const saveConsoleLogin = async (input: { access: string; refresh?: string; orgId?: string; email?: string }) => {
+    await setSecret("opencode", input.access);
+    if (input.refresh) await setSecret("opencode.refresh", input.refresh);
+    await setSecret("opencode.mode", "console");
+    if (input.orgId) await setSecret("opencode.org", input.orgId);
+    if (input.email) await setSecret("opencode.email", input.email);
+    setOnboarded(true);
+    setNotice(null);
+  };
+
+  const saveCopilotLogin = async (input: { access: string; api?: string }) => {
+    await setSecret("github-copilot", input.access);
+    if (input.api) await setSecret("github-copilot.api", input.api);
+    setOnboarded(true);
+    setNotice(null);
   };
 
   const stop = () => abortRef.current?.abort();
@@ -651,8 +758,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     sending,
     draft,
     error,
+    notice,
+    dismissNotice: () => setNotice(null),
+    retry: () => void retry(),
     send,
     stop,
+    welcome,
+    dismissWelcome: () => setOnboarded(true),
+    reopenWelcome: () => setOnboarded(false),
+    saveConsoleLogin,
+    saveCopilotLogin,
+    blockedModels,
     permission,
     answerPermission,
     question,

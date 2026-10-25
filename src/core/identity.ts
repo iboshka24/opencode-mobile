@@ -57,7 +57,7 @@ export function sessionAffinity(sessionId: string): string {
   return `ses_${sha256Hex(sessionId)}`;
 }
 
-export function zenHeaders(sessionId: string, projectId = "mobile"): Record<string, string> {
+export function zenHeaders(sessionId: string, projectId = "mobile", orgId?: string): Record<string, string> {
   const affinity = sessionAffinity(sessionId);
   return {
     "User-Agent": OPENCODE_USER_AGENT,
@@ -67,7 +67,31 @@ export function zenHeaders(sessionId: string, projectId = "mobile"): Record<stri
     "x-session-affinity": affinity,
     "X-Session-Id": affinity,
     "x-opencode-project": projectId,
+    ...(orgId ? { "x-org-id": orgId, "x-opencode-org-id": orgId } : {}),
   };
+}
+
+export function modelKey(model: { providerID: string; id: string }): string {
+  return `${model.providerID}/${model.id}`;
+}
+
+const FREE_MODEL_ORDER = ["big-pickle", "glm-5.3-flash-free", "muse-spark-1.3-contributor-free", "minimax-m2.5-free"];
+
+/** Next free Zen model that is not region-blocked. Signed-in accounts still use this list for country blocks. */
+export function nextFreeModel(
+  models: CatalogModel[],
+  secrets: Record<string, string | undefined>,
+  blocked: ReadonlySet<string>,
+  current?: { providerID: string; id: string },
+): CatalogModel | undefined {
+  const candidates = models.filter(
+    (model) => isZenProvider(model.providerID) && isFree(model) && modelVisible(model, secrets) && model.toolCall && !blocked.has(modelKey(model)),
+  );
+  const ordered = [
+    ...FREE_MODEL_ORDER.flatMap((id) => candidates.filter((model) => model.id === id)),
+    ...candidates.filter((model) => !FREE_MODEL_ORDER.includes(model.id)),
+  ];
+  return ordered.find((model) => !current || modelKey(model) !== modelKey(current));
 }
 
 export function copilotModels(api = "https://api.githubcopilot.com"): CatalogModel[] {

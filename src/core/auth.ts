@@ -1,6 +1,7 @@
 import { base64Url, OPENCODE_USER_AGENT, randomBytes, sha256Bytes } from "./identity";
 
-export const CONSOLE_SERVER = "https://console.opencode.ai";
+/** Current OpenCode Console. Older builds used console.opencode.ai; that host rewrites here. */
+export const CONSOLE_SERVER = "https://opencode.ai/console";
 export const CONSOLE_CLIENT_ID = "opencode-cli";
 export const COPILOT_CLIENT_ID = "Ov23li8tweQw6odWQebz";
 export const COPILOT_API_VERSION = "2026-08-01";
@@ -71,10 +72,20 @@ function seconds(value: unknown, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+/** Console currently returns a path such as `/console/device?...`. Desktop resolves it against the server. */
+export function consoleVerificationUrl(value: string): string {
+  try {
+    return new URL(value, `${CONSOLE_SERVER}/`).href;
+  } catch {
+    return value;
+  }
+}
+
 export function parseConsoleDevice(body: unknown): DeviceChallenge {
   const item = record(body);
   const userCode = text(item.user_code);
-  const verificationUrl = text(item.verification_uri_complete) || text(item.verification_uri);
+  const rawUrl = text(item.verification_uri_complete) || text(item.verification_uri);
+  const verificationUrl = rawUrl ? consoleVerificationUrl(rawUrl) : "";
   const deviceCode = text(item.device_code);
   if (!userCode || !verificationUrl || !deviceCode) throw new Error("Console did not return a device code.");
   return {
@@ -244,6 +255,34 @@ export async function startConsoleLogin(fetchImpl: typeof fetch = fetch, signal?
   const read = await readBody(response);
   if (read.status < 200 || read.status >= 300) throw new Error(formatHttpError(read.status, read.text));
   return parseConsoleDevice(read.body);
+}
+
+export async function loadConsoleAccount(
+  access: string,
+  preferredOrgId?: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ email?: string; orgId?: string; orgName?: string }> {
+  const headers = { Accept: "application/json", Authorization: `Bearer ${access}`, "User-Agent": OPENCODE_USER_AGENT };
+  const read = async (path: string) => {
+    try {
+      const response = await fetchImpl(`${CONSOLE_SERVER}${path}`, { headers });
+      if (!response.ok) return undefined;
+      return (await response.json()) as unknown;
+    } catch {
+      return undefined;
+    }
+  };
+  const [userBody, orgBody] = await Promise.all([read("/api/user"), read("/api/orgs")]);
+  const user = record(userBody);
+  const orgs = Array.isArray(orgBody) ? orgBody.map((item) => record(item)).filter((item) => text(item.id)) : [];
+  const org =
+    (preferredOrgId ? orgs.find((item) => item.id === preferredOrgId) : undefined) ??
+    [...orgs].sort((a, b) => text(a.name).localeCompare(text(b.name)) || text(a.id).localeCompare(text(b.id)))[0];
+  return {
+    email: text(user.email) || undefined,
+    orgId: text(org?.id) || preferredOrgId || undefined,
+    orgName: text(org?.name) || undefined,
+  };
 }
 
 export async function pollConsoleLogin(deviceCode: string, fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<DevicePoll> {
