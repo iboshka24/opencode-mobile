@@ -5,6 +5,7 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AppProvider, useApp } from "../runtime/state";
 import { mono } from "../ui/theme";
+import { Welcome } from "../ui/welcome";
 
 function Shell() {
   const app = useApp();
@@ -32,6 +33,7 @@ function Shell() {
         <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: app.theme.bg } }}>
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="models" options={{ presentation: "modal" }} />
+          <Stack.Screen name="connect" options={{ presentation: "modal" }} />
         </Stack>
         {app.permission ? (
           <View style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "flex-end", padding: 16 }}>
@@ -47,6 +49,7 @@ function Shell() {
           </View>
         ) : null}
         {app.question ? <QuestionCard /> : null}
+        {app.welcome ? <Welcome /> : null}
       </View>
     </View>
   );

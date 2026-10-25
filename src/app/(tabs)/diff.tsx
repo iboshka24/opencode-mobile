@@ -17,10 +17,14 @@ export default function DiffScreen() {
       <ScrollView contentContainerStyle={{ padding: 14, gap: 16 }}>
         {changes.map((change, index) => {
           const lines = diffLines(change.before ?? "", change.after ?? "");
+          const added = lines.filter((line) => line.type === "+").length;
+          const removed = lines.filter((line) => line.type === "-").length;
           return (
             <View key={`${change.path}-${index}`} style={{ borderWidth: 1, borderColor: app.theme.border, borderRadius: 12, overflow: "hidden" }}>
               <Text style={{ color: app.theme.fg, fontFamily: mono, backgroundColor: app.theme.bgElev, padding: 8 }}>
                 {change.summary} {change.path}
+                <Text style={{ color: app.theme.green }}> +{added}</Text>
+                <Text style={{ color: app.theme.red }}> -{removed}</Text>
               </Text>
               {lines.map((line, lineIndex) => (
                 <Text

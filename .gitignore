@@ -1,6 +1,7 @@
 node_modules/
 .expo/
-dist/
+dist/*
+!dist/opencode-mobile-*.apk
 dist-ios/
 web-build/
 expo-env.d.ts

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Protocol } from "../../core/catalog";
 import { THEMES } from "../../core/themes";
@@ -23,6 +24,7 @@ const PROVIDERS: Array<[string, string, string]> = [
 
 export default function SettingsScreen() {
   const app = useApp();
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const [custom, setCustom] = useState<CustomProvider>({
     id: "custom",
@@ -35,10 +37,11 @@ export default function SettingsScreen() {
     <ScrollView style={{ flex: 1, backgroundColor: app.theme.bg }} contentContainerStyle={{ paddingTop: insets.top + 8, paddingHorizontal: 14, paddingBottom: 40, gap: 14 }}>
       <Text style={{ color: app.theme.accent, fontFamily: mono, fontSize: 16 }}>settings</Text>
       <Text style={{ color: app.theme.muted, fontFamily: mono, fontSize: 12, lineHeight: 18 }}>
-        {app.webKeys
-          ? "Web preview stores keys in localStorage. On a phone they go into the iOS keychain or Android keystore."
-          : "API keys are stored in the device secure store and are sent only to the provider you pick."}
+        Free OpenCode Zen models work with no API key, the same way they do in OpenCode desktop. Connect an account for Console, GitHub Copilot, ChatGPT, or Claude. A pasted key is only needed for other providers.
       </Text>
+      <Pressable onPress={() => router.push("/connect")}>
+        <Text style={{ color: app.theme.accent, fontFamily: mono }}>Connect an account</Text>
+      </Pressable>
       {PROVIDERS.map(([id, name, env]) => (
         <KeyField key={id} id={id} name={name} env={env} />
       ))}

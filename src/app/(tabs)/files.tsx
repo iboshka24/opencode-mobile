@@ -70,6 +70,9 @@ export default function FilesScreen() {
             </Text>
           </Pressable>
         ))}
+        {entries.length === 0 && !error ? (
+          <Text style={{ color: app.theme.muted, fontFamily: mono, fontSize: 13, paddingVertical: 16 }}>This folder is empty.</Text>
+        ) : null}
         {error ? <Text style={{ color: app.theme.red, fontFamily: mono }}>{error}</Text> : null}
         {file ? (
           <View style={{ marginTop: 12, gap: 6 }}>
