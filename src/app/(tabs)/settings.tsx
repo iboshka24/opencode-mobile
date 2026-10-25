@@ -37,7 +37,7 @@ export default function SettingsScreen() {
       <Text style={{ color: app.theme.muted, fontFamily: mono, fontSize: 12, lineHeight: 18 }}>
         {app.webKeys
           ? "Web preview stores keys in localStorage. On a phone they go into the iOS keychain or Android keystore."
-          : "API keys are stored in the device secure store and are sent only to the provider you pick."}
+          : "This install keeps the agent on the device. Keys stay in the secure store and are sent only to the provider you pick. There is no dev server."}
       </Text>
       {PROVIDERS.map(([id, name, env]) => (
         <KeyField key={id} id={id} name={name} env={env} />

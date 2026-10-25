@@ -60,19 +60,25 @@ eas submit --platform ios --profile production
 
 Then add testers in App Store Connect. The bundle id is `com.opencode.mobile`.
 
-## Install on Android
+## Install the Android APK
+
+The release APK is a standalone app. The JavaScript bundle and Hermes bytecode are inside the file. After you install it, the phone does not need a computer, Metro, or a dev server. Model calls still go from the phone to OpenCode Zen or another provider API, so the phone needs a network connection and an API key. There is no on-device LLM in this build.
+
+1. Download [opencode-mobile-v0.1.0.apk](https://github.com/iboshka24/opencode-mobile/releases/download/v0.1.0/opencode-mobile-v0.1.0.apk) from the [v0.1.0 release](https://github.com/iboshka24/opencode-mobile/releases/tag/v0.1.0). The APK is arm64-v8a.
+2. On the phone, open the file. If Android asks, allow install from that source.
+3. Open **OpenCode**, then **Settings**, and paste an API key. OpenCode Zen free models use `OPENCODE_API_KEY`.
+4. Pick a model and send a message. The request leaves the phone and goes to that provider.
+
+To build the same APK yourself you need JDK 17, the Android SDK (platform 37, build-tools 37, NDK 27.1), and Node 22:
 
 ```bash
-npx expo start
+npm ci
+npm run apk
 ```
 
-Open the project in Expo Go, or:
+The script runs `expo prebuild -p android` and `gradlew assembleRelease`. It signs with the sideload keystore in `keystore/` (password `opencode-mobile`, alias `opencode`). That key is for direct install only. It is not a Play App Signing key. The APK is written to `dist/opencode-mobile-v0.1.0.apk`.
 
-```bash
-eas build --platform android --profile preview
-```
-
-The preview profile produces an APK. Production is an AAB for Play.
+Expo Go (`npx expo start`) still works for development. `eas build --platform android --profile preview` is the other way to get an APK.
 
 ## Provider setup
 
@@ -176,7 +182,18 @@ eas submit --platform ios --profile production
 
 Идентификатор приложения: `com.opencode.mobile`. В `app.json` уже указано `ITSAppUsesNonExemptEncryption: false`.
 
-Android: `npx expo start` в Expo Go или `eas build --platform android --profile preview` (APK).
+### Установка APK на Android
+
+Готовый APK — самостоятельное приложение: внутри JavaScript-бандл и Hermes. После установки компьютер, Metro и dev-сервер не нужны. Модель по-прежнему вызывается с телефона через API OpenCode Zen или другого провайдера из models.dev. Своей нейросети на устройстве в этой сборке нет.
+
+1. Скачайте [opencode-mobile-v0.1.0.apk](https://github.com/iboshka24/opencode-mobile/releases/download/v0.1.0/opencode-mobile-v0.1.0.apk) из [релиза v0.1.0](https://github.com/iboshka24/opencode-mobile/releases/tag/v0.1.0). Архитектура — arm64-v8a.
+2. Откройте файл на телефоне и разрешите установку из этого источника.
+3. В приложении откройте **Settings** и вставьте API-ключ. Для бесплатных моделей OpenCode Zen это `OPENCODE_API_KEY`.
+4. Выберите модель и отправьте сообщение. Запрос уходит с телефона напрямую провайдеру.
+
+Собрать тот же APK: JDK 17, Android SDK (platform 37, build-tools 37, NDK 27.1), Node 22, затем `npm ci` и `npm run apk`. Подпись — keystore в `keystore/` (пароль `opencode-mobile`, alias `opencode`), только для прямой установки. Файл появится в `dist/opencode-mobile-v0.1.0.apk`.
+
+Для разработки по-прежнему можно `npx expo start` в Expo Go или `eas build --platform android --profile preview`.
 
 ### Ключи и модели
 
