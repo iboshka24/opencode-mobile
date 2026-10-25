@@ -1,0 +1,21 @@
+OpenCode Mobile includes text and behavior ported from OpenCode.
+
+OpenCode
+Copyright (c) 2025 opencode
+https://github.com/anomalyco/opencode
+Licensed under the MIT License. See the upstream LICENSE for the full text.
+
+Ported, with attribution, and otherwise left verbatim:
+
+- System prompts: packages/core/src/session/runner/prompt/system.txt
+- Provider prompts: packages/core/src/plugin/system-prompt/ (anthropic, gpt, gpt-astra, kimi, meta, trinity)
+- Tool descriptions: read, write, edit, glob, grep, shell, webfetch, websearch, todowrite, patch
+- Slash-command prompts: /init (initialize.txt) and /review (review.txt)
+- Prompt selection in packages/core/src/plugin/optimize.ts
+- Edit matching (exact match, then line-trim / curly-quote fallback)
+- The `*** Begin Patch` envelope used by the patch tool
+- The models.dev catalog (https://models.dev/api.json), including OpenCode Zen
+
+A mobile addendum is appended after those prompts. It tells the model that the shell tool is a JavaScript sandbox and that there is no companion computer. The upstream prompt files are not rewritten.
+
+This app does not vendor the OpenCode CLI, the desktop app, or any server. Model requests go from the phone to the provider API the user configures.
